@@ -1,0 +1,46 @@
+name: Wellfound Daily Apply
+
+on:
+  schedule:
+    # Runs every day at 8:00 AM IST
+    # GitHub cron is UTC, so 8:00 AM IST = 2:30 AM UTC
+    - cron: '30 2 * * *'
+
+  # Allows manual run from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  wellfound:
+    runs-on: self-hosted
+
+    env:
+      APPLY_LIVE: true
+      TARGET_LOCATIONS: India||Hyderabad||Bengaluru||Bangalore||Pune||Mumbai||Delhi NCR||Remote India
+      MIN_SKILL_MATCHES: 3
+      MAX_APPLICATIONS: 50
+      MAX_SCAN_JOBS: 150
+      INCLUDE_OFF_PLATFORM: false
+      WELLFOUND_JOBS_URL: https://wellfound.com/jobs
+      JOB_CARD_SELECTOR: .styles_component__uTjje
+      APPLICATIONS_CSV: applications-wellfound.csv
+      LOG_DRY_RUN_TO_CSV: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Run Wellfound automation
+        run: npx playwright test tests/wellfound.spec.js --headed

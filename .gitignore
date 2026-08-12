@@ -1,0 +1,8 @@
+.env
+node_modules/
+.wellfound-chrome-profile/
+playwright/.auth/
+test-results/
+playwright-report/
+applications-wellfound.csv
+*.log
