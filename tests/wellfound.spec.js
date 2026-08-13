@@ -921,7 +921,7 @@ async function chooseOptionNearQuestion(
    */
   const select = container.locator('select').first();
 
-  if (await isVisible(select, 500)) {
+  if (await isVisible(select, 200)) {
     const selectOptions = await select.locator('option').evaluateAll(opts =>
       opts.map((o, index) => ({
         index,
@@ -984,7 +984,7 @@ async function chooseOptionNearQuestion(
    */
   const radio = container.getByRole('radio', { name: optionRegex }).first();
 
-  if (await isVisible(radio, 500)) {
+  if (await isVisible(radio, 200)) {
     await radio.check({ force: true }).catch(async () => {
       await radio.click({ force: true }).catch(() => {});
     });
@@ -1018,7 +1018,7 @@ async function chooseOptionNearQuestion(
    */
   const checkbox = container.getByRole('checkbox', { name: optionRegex }).first();
 
-  if (await isVisible(checkbox, 500)) {
+  if (await isVisible(checkbox, 200)) {
     const checked = await checkbox.isChecked().catch(() => false);
 
     if (!checked) {
@@ -1060,7 +1060,7 @@ async function chooseOptionNearQuestion(
    */
   const combobox = container.getByRole('combobox').first();
 
-  if (await isVisible(combobox, 500)) {
+  if (await isVisible(combobox, 200)) {
     await combobox.click({ force: true }).catch(() => {});
     await page.waitForTimeout(700);
 
@@ -1126,7 +1126,7 @@ async function chooseOptionNearQuestion(
    */
   const button = container.getByRole('button', { name: optionRegex }).first();
 
-  if (await isVisible(button, 500)) {
+  if (await isVisible(button, 200)) {
     await button.click({ force: true }).catch(() => {});
     console.log(`Clicked button option: ${optionRegex}`);
     await page.waitForTimeout(500);
@@ -1160,7 +1160,7 @@ async function chooseOptionNearQuestion(
    */
   const textOption = container.getByText(optionRegex).last();
 
-  if (await isVisible(textOption, 500)) {
+  if (await isVisible(textOption, 200)) {
     await textOption.click({ force: true }).catch(() => {});
     console.log(`Clicked text option: ${optionRegex}`);
     await page.waitForTimeout(500);
@@ -1485,8 +1485,8 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       continue;
     }
 
-    // 60-second hard timeout per apply attempt, one retry max
-    const JOB_TIMEOUT_MS = 60 * 1000;
+    // 90-second hard timeout per apply attempt, one retry max
+    const JOB_TIMEOUT_MS = 90 * 1000;
     let result;
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (attempt > 1) {
@@ -1497,7 +1497,7 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       result = await Promise.race([
         applyToWellfoundJob(page, job, matchedSkills),
         new Promise(resolve =>
-          setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 60s' }), JOB_TIMEOUT_MS)
+          setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 90s' }), JOB_TIMEOUT_MS)
         ),
       ]);
       if (result.status === 'TIMEOUT') {
@@ -1550,6 +1550,9 @@ test('open Wellfound internship jobs and apply by criteria', async () => {
 
 const session = await createBrowserSession();
 const { page } = session;
+
+// Always create today's CSV at run start so the email always has a file to attach
+ensureApplicationsCsv();
 
 try {
   await applyWellfoundInternshipFilter(page);
