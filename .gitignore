@@ -6,3 +6,6 @@ test-results/
 playwright-report/
 applications-wellfound.csv
 *.log
+
+# Generated at runtime — never commit session cookies
+playwright/.auth/wellfound.json

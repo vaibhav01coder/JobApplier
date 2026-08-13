@@ -82,9 +82,10 @@ const TARGET_LOCATIONS = env(
   .map(x => x.trim())
   .filter(Boolean);
 
-const MIN_SKILL_MATCHES = Number(env('MIN_SKILL_MATCHES', '3'));
+const MIN_SKILL_MATCHES = Number(env('MIN_SKILL_MATCHES', '1'));
 const MAX_APPLICATIONS = Number(env('MAX_APPLICATIONS', '50'));
 const MAX_SCAN_JOBS = Number(env('MAX_SCAN_JOBS', '150'));
+const MIN_APPLY_TARGET = Number(env('MIN_APPLY_TARGET', '20'));
 
 const APPLY_LIVE = String(env('APPLY_LIVE', 'false')).toLowerCase() === 'true';
 const INCLUDE_OFF_PLATFORM = String(env('INCLUDE_OFF_PLATFORM', 'false')).toLowerCase() === 'true';
@@ -874,7 +875,25 @@ async function getQuestionContainer(page, questionRegex) {
     return null;
   }
 
-  // Get nearest useful parent container
+  // Walk up ancestor levels until we find one that contains interactive elements
+  for (const level of [1, 2, 3, 4]) {
+    const container = questionText.locator(
+      `xpath=ancestor::*[self::fieldset or self::section or self::div][${level}]`
+    );
+
+    if ((await container.count().catch(() => 0)) === 0) continue;
+
+    const hasInteractive = await container
+      .locator('input, select, button, [role="radio"], [role="checkbox"], [role="combobox"]')
+      .count()
+      .catch(() => 0);
+
+    if (hasInteractive > 0) {
+      return container;
+    }
+  }
+
+  // Fallback to nearest div
   return questionText.locator(
     'xpath=ancestor::*[self::fieldset or self::section or self::div][1]'
   );
@@ -1124,7 +1143,7 @@ async function chooseOptionNearQuestion(
       if (await firstButton.isVisible().catch(() => false)) {
         const buttonText = await firstButton.innerText().catch(() => '');
 
-        if (/close|cancel|dismiss|back/i.test(buttonText)) {
+        if (/close|cancel|dismiss|back|send|submit|apply/i.test(buttonText)) {
           continue;
         }
 
@@ -1286,7 +1305,8 @@ async function answerExtraApplicationQuestions(page) {
     page,
     /willing.*relocat|open.*relocat|relocat/i,
     /yes|open|willing/i,
-    'Willing to relocate'
+    'Willing to relocate',
+    { fallbackToFirst: true }
   );
 
 const preferredRelocationHandled = await chooseOptionNearQuestion(
@@ -1337,7 +1357,8 @@ if (!preferredLocationHandled) {
     page,
     /work.*mode|remote|hybrid|onsite|office/i,
     /remote|hybrid|onsite|yes/i,
-    'Work mode preference'
+    'Work mode preference',
+    { fallbackToFirst: true }
   );
 
   /**
@@ -1401,8 +1422,8 @@ if (!preferredLocationHandled) {
   );
 }
 
-async function processJobsAndApply(page, jobs) {
-  let appliedCount = 0;
+async function processJobsAndApply(page, jobs, { startApplied = 0, processedLinks = new Set() } = {}) {
+  let appliedCount = startApplied;
   let checkedCount = 0;
   let skippedCount = 0;
 
@@ -1411,6 +1432,9 @@ async function processJobsAndApply(page, jobs) {
       console.log(`Reached max applications: ${MAX_APPLICATIONS}`);
       break;
     }
+
+    if (processedLinks.has(job.link)) continue;
+    processedLinks.add(job.link);
 
     checkedCount++;
 
@@ -1455,7 +1479,19 @@ async function processJobsAndApply(page, jobs) {
       continue;
     }
 
-    const result = await applyToWellfoundJob(page, job, matchedSkills);
+    // Retry up to 2 times if submit button was not found
+    let result;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (attempt > 1) {
+        console.log(`Apply failed (${result.status}), retrying in 4s... [attempt ${attempt}/2]`);
+        await closeModalIfOpen(page);
+        await page.waitForTimeout(4000);
+        await page.goto(job.link, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.waitForTimeout(2000);
+      }
+      result = await applyToWellfoundJob(page, job, matchedSkills);
+      if (result.applied || result.status === 'SKIPPED_NO_APPLY_BUTTON') break;
+    }
 
     if (result.applied) {
       appliedCount++;
@@ -1483,11 +1519,7 @@ async function processJobsAndApply(page, jobs) {
     await page.waitForTimeout(1500);
   }
 
-  console.log('\n========== SUMMARY ==========');
-  console.log(`Checked jobs: ${checkedCount}`);
-  console.log(`${APPLY_LIVE ? 'Submitted' : 'Dry-run matched'} jobs: ${appliedCount}`);
-  console.log(`Skipped jobs: ${skippedCount}`);
-  console.log(`Spreadsheet path: ${APPLICATIONS_CSV_PATH}`);
+  return { appliedCount, checkedCount, skippedCount };
 }
 
 test('open Wellfound internship jobs and apply by criteria', async () => {
@@ -1512,14 +1544,52 @@ try {
 
   await setOffPlatformJobs(page);
 
-  const resolvedSelector = await detectJobCardSelector(page, JOB_CARD_SELECTOR);
-  const jobs = await collectJobsByScrolling(page, resolvedSelector, MAX_SCAN_JOBS);
+  const processedLinks = new Set();
+  let totalApplied = 0;
+  let scanLimit = MAX_SCAN_JOBS;
 
-  if (!jobs.length) {
-    throw new Error(`No jobs collected. Check JOB_CARD_SELECTOR: ${resolvedSelector}`);
+  for (let round = 1; round <= 3; round++) {
+    console.log(`\n--- Round ${round} (target: ${MIN_APPLY_TARGET}, submitted so far: ${totalApplied}) ---`);
+
+    const resolvedSelector = await detectJobCardSelector(page, JOB_CARD_SELECTOR);
+    const allJobs = await collectJobsByScrolling(page, resolvedSelector, scanLimit);
+
+    if (!allJobs.length) {
+      if (round === 1) throw new Error(`No jobs collected. Check JOB_CARD_SELECTOR: ${resolvedSelector}`);
+      console.log('No jobs found in this round. Stopping.');
+      break;
+    }
+
+    const newJobs = allJobs.filter(j => !processedLinks.has(j.link));
+
+    if (!newJobs.length) {
+      console.log('No new jobs in this round. Stopping.');
+      break;
+    }
+
+    const result = await processJobsAndApply(page, newJobs, { startApplied: totalApplied, processedLinks });
+    totalApplied = result.appliedCount;
+
+    console.log('\n========== SUMMARY ==========');
+    console.log(`Checked jobs: ${result.checkedCount}`);
+    console.log(`${APPLY_LIVE ? 'Submitted' : 'Dry-run matched'} jobs: ${totalApplied}`);
+    console.log(`Skipped jobs: ${result.skippedCount}`);
+    console.log(`Spreadsheet path: ${APPLICATIONS_CSV_PATH}`);
+
+    if (totalApplied >= MIN_APPLY_TARGET || totalApplied >= MAX_APPLICATIONS) {
+      console.log(`Reached target: ${totalApplied}/${MIN_APPLY_TARGET}`);
+      break;
+    }
+
+    if (round < 3) {
+      console.log(`\nOnly ${totalApplied}/${MIN_APPLY_TARGET} submitted. Reloading jobs for round ${round + 1}...`);
+      scanLimit = Math.min(scanLimit + 100, 400);
+      await applyWellfoundInternshipFilter(page);
+      await setOffPlatformJobs(page);
+    }
   }
 
-  await processJobsAndApply(page, jobs);
+  console.log(`\nFinal submitted count: ${totalApplied}`);
 } finally {
   await session.close();
 }
