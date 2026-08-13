@@ -1422,7 +1422,7 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
   let appliedCount = startApplied;
   let checkedCount = 0;
   let skippedCount = 0;
-  const BUDGET_MS = 17 * 60 * 1000; // stop 3 min before 20-min test timeout
+  const BUDGET_MS = 15 * 60 * 1000; // stop 5 min before 20-min test timeout
 
   for (const job of jobs) {
     if (Date.now() - runStart > BUDGET_MS) {
@@ -1481,8 +1481,8 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       continue;
     }
 
-    // 15-second hard timeout per apply attempt, one retry max
-    const JOB_TIMEOUT_MS = 15 * 1000;
+    // 60-second hard timeout per apply attempt, one retry max
+    const JOB_TIMEOUT_MS = 60 * 1000;
     let result;
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (attempt > 1) {
@@ -1493,7 +1493,7 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       result = await Promise.race([
         applyToWellfoundJob(page, job, matchedSkills),
         new Promise(resolve =>
-          setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 15s' }), JOB_TIMEOUT_MS)
+          setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 60s' }), JOB_TIMEOUT_MS)
         ),
       ]);
       if (result.status === 'TIMEOUT') {
