@@ -794,8 +794,9 @@ async function applyToWellfoundJob(page, job, matchedSkills) {
 
       await nextButton.click({ force: true }).catch(() => {});
       await page.waitForTimeout(1500);
-
-      await fillCommonApplicationFields(page, job, matchedSkills);
+      // Fill only if new fields appeared on this step
+      const newTextarea = await page.locator('textarea:visible').count().catch(() => 0);
+      if (newTextarea > 0) await fillCommonApplicationFields(page, job, matchedSkills);
       continue;
     }
 
@@ -1479,7 +1480,8 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       continue;
     }
 
-    // Retry up to 2 times if submit button was not found
+    // Retry up to 2 times if submit button was not found (3-min timeout per attempt)
+    const JOB_TIMEOUT_MS = 3 * 60 * 1000;
     let result;
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (attempt > 1) {
@@ -1489,7 +1491,17 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
         await page.goto(job.link, { waitUntil: 'domcontentloaded', timeout: 60000 });
         await page.waitForTimeout(2000);
       }
-      result = await applyToWellfoundJob(page, job, matchedSkills);
+      result = await Promise.race([
+        applyToWellfoundJob(page, job, matchedSkills),
+        new Promise(resolve =>
+          setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 3 min' }), JOB_TIMEOUT_MS)
+        ),
+      ]);
+      if (result.status === 'TIMEOUT') {
+        console.log('SKIP: Job timed out after 3 minutes, moving on.');
+        await closeModalIfOpen(page);
+        break;
+      }
       if (result.applied || result.status === 'SKIPPED_NO_APPLY_BUTTON') break;
     }
 
