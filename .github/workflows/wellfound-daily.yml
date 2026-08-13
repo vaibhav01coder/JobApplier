@@ -89,6 +89,6 @@ jobs:
         if: always()
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          EMAIL: ${{ secrets.EMAIL }}
+          EMAIL: ${{ secrets.NOTIFY_EMAIL }}
           JOB_STATUS: ${{ job.status }}
         run: node send-results-email.js
