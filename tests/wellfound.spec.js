@@ -1486,8 +1486,8 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       continue;
     }
 
-    // Retry up to 2 times if submit button was not found (3-min timeout per attempt)
-    const JOB_TIMEOUT_MS = 3 * 60 * 1000;
+    // Retry up to 2 times if submit button was not found (15-sec timeout per attempt)
+    const JOB_TIMEOUT_MS = 15 * 1000;
     let result;
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (attempt > 1) {
@@ -1500,7 +1500,7 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       result = await Promise.race([
         applyToWellfoundJob(page, job, matchedSkills),
         new Promise(resolve =>
-          setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 3 min' }), JOB_TIMEOUT_MS)
+          setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 15s' }), JOB_TIMEOUT_MS)
         ),
       ]);
       if (result.status === 'TIMEOUT') {

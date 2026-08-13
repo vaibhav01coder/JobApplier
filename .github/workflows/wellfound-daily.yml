@@ -17,7 +17,7 @@ jobs:
       TARGET_LOCATIONS: "India||Hyderabad||Bengaluru||Bangalore||Pune||Mumbai||Delhi NCR||Remote India"
       TARGET_ROLES: "internship"
       MIN_SKILL_MATCHES: "1"
-      MIN_APPLY_TARGET: "20"
+      MIN_APPLY_TARGET: "10"
       MAX_APPLICATIONS: "50"
       MAX_SCAN_JOBS: "150"
       INCLUDE_OFF_PLATFORM: "false"
