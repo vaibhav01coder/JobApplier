@@ -537,6 +537,66 @@ async function collectJobsByScrolling(page, selector, maxJobs = 150) {
   return jobs;
 }
 
+async function detectJobCardSelector(page, configured) {
+  if ((await page.locator(configured).count()) > 0) {
+    return configured;
+  }
+
+  console.log(`[selector] '${configured}' matched 0 elements — auto-detecting...`);
+
+  // Try progressively broader patterns, each filtered to elements that contain a job link
+  const candidates = [
+    '[class*="styles_component__"]',
+    '[class*="styles_jobListing"]',
+    '[class*="styles_job"]',
+    '[class*="job-card"]',
+    '[class*="JobCard"]',
+    '[class*="card"]:has(a[href*="/jobs/"])',
+    '[class*="listing"]:has(a[href*="/jobs/"])',
+  ];
+
+  for (const c of candidates) {
+    const n = await page.locator(c).count();
+    if (n > 0) {
+      console.log(`[selector] auto-detected '${c}' (${n} elements)`);
+      return c;
+    }
+  }
+
+  // Inspect the live DOM: find the class that appears exactly once per job link
+  const autoClass = await page.evaluate(() => {
+    const links = [...document.querySelectorAll('a[href*="/jobs/"]')].slice(0, 10);
+    if (!links.length) return null;
+
+    const counts = {};
+    for (const link of links) {
+      let el = link.parentElement;
+      for (let d = 0; el && el !== document.body && d < 8; d++, el = el.parentElement) {
+        if (typeof el.className === 'string') {
+          for (const cls of el.className.split(/\s+/).filter(Boolean)) {
+            counts[cls] = (counts[cls] || 0) + 1;
+          }
+        }
+      }
+    }
+
+    const target = links.length;
+    return Object.entries(counts).find(([, c]) => c === target)?.[0] ?? null;
+  });
+
+  if (autoClass) {
+    const sel = `.${CSS.escape(autoClass)}`;
+    const n = await page.locator(sel).count();
+    if (n > 0) {
+      console.log(`[selector] DOM-detected '${sel}' (${n} elements)`);
+      return sel;
+    }
+  }
+
+  console.warn(`[selector] auto-detection failed, sticking with '${configured}'`);
+  return configured;
+}
+
 async function extractJobDetailText(page) {
   await page.waitForTimeout(2500);
 
@@ -1451,10 +1511,11 @@ try {
 
   await setOffPlatformJobs(page);
 
-  const jobs = await collectJobsByScrolling(page, JOB_CARD_SELECTOR, MAX_SCAN_JOBS);
+  const resolvedSelector = await detectJobCardSelector(page, JOB_CARD_SELECTOR);
+  const jobs = await collectJobsByScrolling(page, resolvedSelector, MAX_SCAN_JOBS);
 
   if (!jobs.length) {
-    throw new Error(`No jobs collected. Check JOB_CARD_SELECTOR: ${JOB_CARD_SELECTOR}`);
+    throw new Error(`No jobs collected. Check JOB_CARD_SELECTOR: ${resolvedSelector}`);
   }
 
   await processJobsAndApply(page, jobs);
