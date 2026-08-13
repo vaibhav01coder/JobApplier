@@ -88,7 +88,7 @@ const MAX_APPLICATIONS = Number(env('MAX_APPLICATIONS', '50'));
 const MAX_SCAN_JOBS = Number(env('MAX_SCAN_JOBS', '150'));
 const MIN_APPLY_TARGET = Number(env('MIN_APPLY_TARGET', '20'));
 
-const TARGET_ROLES = env('TARGET_ROLES', 'intern||internship')
+const TARGET_ROLES = env('TARGET_ROLES', 'internship')
   .split('||')
   .map(x => x.trim().toLowerCase())
   .filter(Boolean);

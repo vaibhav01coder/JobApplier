@@ -15,7 +15,7 @@ jobs:
       # ── Bot behaviour ──────────────────────────────────────────────────────
       APPLY_LIVE: "true"
       TARGET_LOCATIONS: "India||Hyderabad||Bengaluru||Bangalore||Pune||Mumbai||Delhi NCR||Remote India"
-      TARGET_ROLES: "intern||internship"
+      TARGET_ROLES: "internship"
       MIN_SKILL_MATCHES: "1"
       MIN_APPLY_TARGET: "20"
       MAX_APPLICATIONS: "50"
