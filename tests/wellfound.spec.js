@@ -1089,6 +1089,68 @@ async function chooseOptionNearQuestion(
   console.log(`Could not answer question: ${debugName || questionRegex}`);
   return false;
 }
+const STORAGE_STATE_PATH = path.join(ROOT_DIR, 'playwright/.auth/wellfound.json');
+
+async function createBrowserSession() {
+  const isCI = String(process.env.CI || '').toLowerCase() === 'true';
+
+  if (isCI) {
+    if (!fs.existsSync(STORAGE_STATE_PATH)) {
+      throw new Error(
+        `Missing storage state file: ${STORAGE_STATE_PATH}. Add WELLFOUND_STORAGE_STATE_B64 GitHub secret.`
+      );
+    }
+
+    const browser = await chromium.launch({
+      headless: true,
+    });
+
+    const context = await browser.newContext({
+      storageState: STORAGE_STATE_PATH,
+      viewport: {
+        width: 1280,
+        height: 900,
+      },
+    });
+
+    const page = await context.newPage();
+
+    return {
+      browser,
+      context,
+      page,
+      close: async () => {
+        await browser.close();
+      },
+    };
+  }
+
+  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+    channel: 'chrome',
+    headless: false,
+    viewport: {
+      width: 1280,
+      height: 900,
+    },
+    args: [
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-popup-blocking',
+      '--window-size=1280,900',
+    ],
+  });
+
+  const page = context.pages()[0] || await context.newPage();
+
+  return {
+    browser: null,
+    context,
+    page,
+    close: async () => {
+      await context.close();
+    },
+  };
+}
 
 async function fillTextNearQuestion(page, questionRegex, value, debugName = '') {
   if (!value) return false;
@@ -1364,39 +1426,25 @@ test('open Wellfound internship jobs and apply by criteria', async () => {
   console.log(`Include off-platform jobs: ${INCLUDE_OFF_PLATFORM}`);
   console.log('========================================');
 
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    channel: 'chrome',
-    headless: false,
-    viewport: {
-      width: 1280,
-      height: 900,
-    },
-    args: [
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-popup-blocking',
-      '--window-size=1280,900',
-    ],
-  });
+const session = await createBrowserSession();
+const { page } = session;
 
-  const page = context.pages()[0] || await context.newPage();
+try {
+  await applyWellfoundInternshipFilter(page);
 
-  try {
-    await applyWellfoundInternshipFilter(page);
+  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page.locator('body')).toBeVisible();
 
-    await expect(page).not.toHaveURL(/\/login/);
-    await expect(page.locator('body')).toBeVisible();
+  await setOffPlatformJobs(page);
 
-    await setOffPlatformJobs(page);
+  const jobs = await collectJobsByScrolling(page, JOB_CARD_SELECTOR, MAX_SCAN_JOBS);
 
-    const jobs = await collectJobsByScrolling(page, JOB_CARD_SELECTOR, MAX_SCAN_JOBS);
-
-    if (!jobs.length) {
-      throw new Error(`No jobs collected. Check JOB_CARD_SELECTOR: ${JOB_CARD_SELECTOR}`);
-    }
-
-    await processJobsAndApply(page, jobs);
-  } finally {
-    await context.close();
+  if (!jobs.length) {
+    throw new Error(`No jobs collected. Check JOB_CARD_SELECTOR: ${JOB_CARD_SELECTOR}`);
   }
+
+  await processJobsAndApply(page, jobs);
+} finally {
+  await session.close();
+}
 });
