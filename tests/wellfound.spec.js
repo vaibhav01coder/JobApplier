@@ -360,7 +360,8 @@ async function applyWellfoundInternshipFilter(page) {
     timeout: 60000,
   });
 
-  await page.waitForTimeout(3000);
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await page.waitForTimeout(4000);
 
   const filtersButton = page.getByRole('button', { name: /filter|filters/i });
 
@@ -1103,6 +1104,13 @@ async function createBrowserSession() {
 
     const browser = await chromium.launch({
       headless: true,
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-infobars',
+        '--window-size=1280,900',
+      ],
     });
 
     const context = await browser.newContext({
@@ -1111,6 +1119,12 @@ async function createBrowserSession() {
         width: 1280,
         height: 900,
       },
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    });
+
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
     const page = await context.newPage();
