@@ -105,6 +105,8 @@ const APPLICATIONS_CSV_PATH = path.isAbsolute(env('APPLICATIONS_CSV', 'applicati
   ? env('APPLICATIONS_CSV', 'applications-wellfound.csv')
   : path.join(ROOT_DIR, env('APPLICATIONS_CSV', 'applications-wellfound.csv'));
 
+const TODAY_CSV_PATH = path.join(ROOT_DIR, 'applications-wellfound-today.csv');
+
 const LOG_DRY_RUN_TO_CSV = String(env('LOG_DRY_RUN_TO_CSV', 'false')).toLowerCase() === 'true';
 
 function csvCell(value) {
@@ -119,30 +121,18 @@ function csvRow(values) {
   return values.map(csvCell).join(',') + '\n';
 }
 
+const CSV_HEADER = '﻿' + csvRow([
+  'Date', 'Site', 'Status', 'Mode', 'Title', 'Company',
+  'Job Link', 'Matched Skills', 'Skill Count', 'Location Match', 'Target Locations', 'Note',
+]);
+
 function ensureApplicationsCsv() {
-  if (fs.existsSync(APPLICATIONS_CSV_PATH)) {
-    return;
+  // All-time CSV: only create if missing (never overwrite)
+  if (!fs.existsSync(APPLICATIONS_CSV_PATH)) {
+    fs.writeFileSync(APPLICATIONS_CSV_PATH, CSV_HEADER, 'utf8');
   }
-
-  // BOM helps Excel read UTF-8 correctly
-  const header =
-    '﻿' +
-    csvRow([
-      'Date',
-      'Site',
-      'Status',
-      'Mode',
-      'Title',
-      'Company',
-      'Job Link',
-      'Matched Skills',
-      'Skill Count',
-      'Location Match',
-      'Target Locations',
-      'Note',
-    ]);
-
-  fs.writeFileSync(APPLICATIONS_CSV_PATH, header, 'utf8');
+  // Today's CSV: always start fresh for this run
+  fs.writeFileSync(TODAY_CSV_PATH, CSV_HEADER, 'utf8');
 }
 
 function isAlreadyLogged(jobLink) {
@@ -169,24 +159,23 @@ function saveApplicationToCsv({
     return;
   }
 
-  fs.appendFileSync(
-    APPLICATIONS_CSV_PATH,
-    csvRow([
-      new Date().toLocaleString(),
-      'Wellfound',
-      status,
-      APPLY_LIVE ? 'LIVE' : 'DRY_RUN',
-      job.title,
-      job.company,
-      job.link,
-      matchedSkills.join('; '),
-      matchedSkills.length,
-      matchedLocation,
-      TARGET_LOCATIONS.join('; '),
-      note,
-    ]),
-    'utf8'
-  );
+  const row = csvRow([
+    new Date().toLocaleString(),
+    'Wellfound',
+    status,
+    APPLY_LIVE ? 'LIVE' : 'DRY_RUN',
+    job.title,
+    job.company,
+    job.link,
+    matchedSkills.join('; '),
+    matchedSkills.length,
+    matchedLocation,
+    TARGET_LOCATIONS.join('; '),
+    note,
+  ]);
+
+  fs.appendFileSync(APPLICATIONS_CSV_PATH, row, 'utf8');
+  fs.appendFileSync(TODAY_CSV_PATH, row, 'utf8');
 
   console.log('Saved to spreadsheet:', APPLICATIONS_CSV_PATH);
 }

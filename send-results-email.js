@@ -6,7 +6,11 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const TO_EMAIL = process.env.EMAIL || '';
 const RUN_NUMBER = process.env.GITHUB_RUN_NUMBER || 'local';
 const JOB_STATUS = process.env.JOB_STATUS || 'unknown';
-const CSV_PATH = path.join(__dirname, 'applications-wellfound.csv');
+const USE_TODAY = process.env.TODAY_CSV === 'true';
+const CSV_PATH = USE_TODAY
+  ? path.join(__dirname, 'applications-wellfound-today.csv')
+  : path.join(__dirname, 'applications-wellfound.csv');
+const CSV_FILENAME = USE_TODAY ? 'applications-today.csv' : 'applications-wellfound.csv';
 
 if (!RESEND_API_KEY) { console.error('RESEND_API_KEY not set'); process.exit(1); }
 if (!TO_EMAIL) { console.error('EMAIL not set'); process.exit(1); }
@@ -14,8 +18,8 @@ if (!TO_EMAIL) { console.error('EMAIL not set'); process.exit(1); }
 let attachments = [];
 if (fs.existsSync(CSV_PATH)) {
   const content = fs.readFileSync(CSV_PATH).toString('base64');
-  attachments = [{ filename: 'applications-wellfound.csv', content }];
-  console.log('CSV found, attaching...');
+  attachments = [{ filename: CSV_FILENAME, content }];
+  console.log('CSV found, attaching:', CSV_PATH);
 } else {
   console.log('No CSV file found, sending without attachment.');
 }

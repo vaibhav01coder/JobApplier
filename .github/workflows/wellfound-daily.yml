@@ -77,18 +77,19 @@ jobs:
       - name: Run Wellfound automation
         run: npx playwright test tests/wellfound.spec.js
 
-      - name: Upload applications CSV
+      - name: Upload all-time CSV as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: applications-run-${{ github.run_number }}
+          name: all-applications-run-${{ github.run_number }}
           path: applications-wellfound.csv
           if-no-files-found: warn
 
-      - name: Email results to Gmail
+      - name: Email today's applications to Gmail
         if: always()
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL: ${{ secrets.NOTIFY_EMAIL }}
           JOB_STATUS: ${{ job.status }}
+          TODAY_CSV: "true"
         run: node send-results-email.js
