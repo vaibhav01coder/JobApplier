@@ -1089,7 +1089,7 @@ async function chooseOptionNearQuestion(
   console.log(`Could not answer question: ${debugName || questionRegex}`);
   return false;
 }
-const STORAGE_STATE_PATH = path.join(ROOT_DIR, 'playwright/.auth/wellfound.json');
+const STORAGE_STATE_PATH = path.join(ROOT_DIR, 'playwright/.auth/user.json');
 
 async function createBrowserSession() {
   const isCI = String(process.env.CI || '').toLowerCase() === 'true';
