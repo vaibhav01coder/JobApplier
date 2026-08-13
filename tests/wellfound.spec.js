@@ -390,47 +390,41 @@ async function applyWellfoundInternshipFilter(page) {
     await page.waitForTimeout(1000);
   }
 
-  const fullTimeCheckbox = page.getByRole('checkbox', {
-    name: /full.?time/i,
-  });
-
-  if (await fullTimeCheckbox.isVisible().catch(() => false)) {
-    if (await fullTimeCheckbox.isChecked().catch(() => false)) {
-      await fullTimeCheckbox.uncheck({ force: true }).catch(() => {});
-      await page.waitForTimeout(500);
-    }
-  } else {
-    const fullTimeOption = page.getByText(/full.?time/i).first();
-
-    if (await fullTimeOption.isVisible().catch(() => false)) {
-      await fullTimeOption.click({ force: true }).catch(() => {});
-      await page.waitForTimeout(500);
+  // Uncheck all job-type checkboxes first, then check only TARGET_ROLES ones
+  const allJobTypeCheckboxes = page.getByRole('checkbox');
+  const checkboxCount = await allJobTypeCheckboxes.count().catch(() => 0);
+  for (let i = 0; i < checkboxCount; i++) {
+    const cb = allJobTypeCheckboxes.nth(i);
+    const label = await cb.getAttribute('aria-label').catch(() => '') ||
+                  await cb.locator('xpath=following-sibling::*[1]').innerText().catch(() => '') || '';
+    if (/full.?time|contract|part.?time/i.test(label)) {
+      if (await cb.isChecked().catch(() => false)) {
+        await cb.uncheck({ force: true }).catch(() => {});
+        await page.waitForTimeout(300);
+      }
     }
   }
 
-  const internshipCheckbox = page.getByRole('checkbox', {
-    name: /internship|intern/i,
-  });
-
-  if (await internshipCheckbox.isVisible().catch(() => false)) {
-    if (!(await internshipCheckbox.isChecked().catch(() => false))) {
-      await internshipCheckbox.check({ force: true }).catch(() => {});
+  // Select checkboxes matching TARGET_ROLES
+  const roleRegex = new RegExp(TARGET_ROLES.join('|'), 'i');
+  const roleCheckbox = page.getByRole('checkbox', { name: roleRegex });
+  if (await roleCheckbox.isVisible().catch(() => false)) {
+    if (!(await roleCheckbox.isChecked().catch(() => false))) {
+      await roleCheckbox.check({ force: true }).catch(() => {});
       await page.waitForTimeout(500);
     }
   } else {
-    const internshipOption = page.getByText(/internship|intern/i).first();
-
-    if (await internshipOption.isVisible().catch(() => false)) {
-      await internshipOption.click({ force: true }).catch(() => {});
+    const roleOption = page.getByText(roleRegex).first();
+    if (await roleOption.isVisible().catch(() => false)) {
+      await roleOption.click({ force: true }).catch(() => {});
       await page.waitForTimeout(500);
     }
   }
 
   await closeWellfoundFilterPanel(page);
-
   await page.waitForTimeout(3000);
 
-  console.log('Internship filter applied and filter panel closed.');
+  console.log(`Job type filter applied for: ${TARGET_ROLES.join(', ')}`);
 }
 
 async function setOffPlatformJobs(page) {
@@ -1483,14 +1477,6 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
     if (!isLocationOk) {
       skippedCount++;
       console.log('SKIP: location is not India/selected location');
-      continue;
-    }
-
-    const isRoleOk = roleMatches(fullText);
-    console.log(`Role match: ${isRoleOk} (target: ${TARGET_ROLES.join(', ')})`);
-    if (!isRoleOk) {
-      skippedCount++;
-      console.log('SKIP: role does not match TARGET_ROLES');
       continue;
     }
 
