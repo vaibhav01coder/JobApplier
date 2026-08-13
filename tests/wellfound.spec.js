@@ -283,6 +283,10 @@ function getMatchedSkills(text) {
 function locationMatches(text) {
   const lowerText = normalizeText(text);
 
+  // Remote-only jobs are always allowed — can be done from anywhere
+  const isRemoteOnly = /\bremote\s*only\b|\bfully\s*remote\b|\bwork\s*from\s*anywhere\b|\bremote\s*first\b/i.test(lowerText);
+  if (isRemoteOnly) return true;
+
   const hasTargetLocation = TARGET_LOCATIONS.some(location => {
     return lowerText.includes(normalizeText(location));
   });
