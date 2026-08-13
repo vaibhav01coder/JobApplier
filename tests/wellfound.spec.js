@@ -96,7 +96,7 @@ const TARGET_ROLES = env('TARGET_ROLES', 'intern||internship')
 function roleMatches(text) {
   if (!TARGET_ROLES.length) return true;
   const lower = (text || '').toLowerCase();
-  return TARGET_ROLES.some(r => lower.includes(r));
+  return TARGET_ROLES.some(r => new RegExp(`\\b${r}\\b`).test(lower));
 }
 
 const APPLY_LIVE = String(env('APPLY_LIVE', 'false')).toLowerCase() === 'true';
