@@ -741,7 +741,7 @@ async function closeModalIfOpen(page) {
   await page.waitForTimeout(700);
 }
 
-async function applyToWellfoundJob(page, job, matchedSkills) {
+async function applyToWellfoundJob(page, job, matchedSkills, { onSubmitted } = {}) {
   console.log(`Trying to apply: ${job.title}`);
   console.log(`Link: ${job.link}`);
 
@@ -831,33 +831,21 @@ async function applyToWellfoundJob(page, job, matchedSkills) {
 
   if (await successText.isVisible().catch(() => false)) {
     console.log('APPLICATION SUBMITTED SUCCESSFULLY');
-
-    return {
-      applied: true,
-      status: 'SUBMITTED',
-      note: 'Success message detected',
-    };
+    if (onSubmitted) onSubmitted({ status: 'SUBMITTED', note: 'Success message detected' });
+    return { applied: true, status: 'SUBMITTED', note: 'Success message detected' };
   }
 
   const pageText = await page.locator('body').innerText().catch(() => '');
 
   if (/application sent|applied|submitted/i.test(pageText)) {
     console.log('APPLICATION SUBMITTED SUCCESSFULLY');
-
-    return {
-      applied: true,
-      status: 'SUBMITTED',
-      note: 'Success text found in page body',
-    };
+    if (onSubmitted) onSubmitted({ status: 'SUBMITTED', note: 'Success text found in page body' });
+    return { applied: true, status: 'SUBMITTED', note: 'Success text found in page body' };
   }
 
   console.log('Submit clicked, but success confirmation was not detected.');
-
-  return {
-    applied: true,
-    status: 'SUBMITTED_UNCONFIRMED',
-    note: 'Submit clicked, but success confirmation was not detected',
-  };
+  if (onSubmitted) onSubmitted({ status: 'SUBMITTED_UNCONFIRMED', note: 'Submit clicked, no confirmation detected' });
+  return { applied: true, status: 'SUBMITTED_UNCONFIRMED', note: 'Submit clicked, no confirmation detected' };
 }
 async function isVisible(locator, timeout = 800) {
   try {
@@ -1495,7 +1483,15 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
         await page.waitForTimeout(1000);
       }
       result = await Promise.race([
-        applyToWellfoundJob(page, job, matchedSkills),
+        applyToWellfoundJob(page, job, matchedSkills, {
+          onSubmitted: ({ status, note }) => {
+            appliedCount++;
+            if (APPLY_LIVE || LOG_DRY_RUN_TO_CSV) {
+              saveApplicationToCsv({ job, matchedSkills, matchedLocation, status, note });
+            }
+            console.log(`Submitted count: ${appliedCount}/${MAX_APPLICATIONS}`);
+          },
+        }),
         new Promise(resolve =>
           setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 90s' }), JOB_TIMEOUT_MS)
         ),
@@ -1508,25 +1504,7 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       if (result.applied || result.status === 'SKIPPED_NO_APPLY_BUTTON') break;
     }
 
-    if (result.applied) {
-      appliedCount++;
-
-      if (APPLY_LIVE || LOG_DRY_RUN_TO_CSV) {
-        saveApplicationToCsv({
-          job,
-          matchedSkills,
-          matchedLocation,
-          status: result.status,
-          note: result.note,
-        });
-      }
-
-      if (APPLY_LIVE) {
-        console.log(`Submitted count: ${appliedCount}/${MAX_APPLICATIONS}`);
-      } else {
-        console.log(`Dry-run matched count: ${appliedCount}/${MAX_APPLICATIONS}`);
-      }
-    } else {
+    if (!result.applied) {
       skippedCount++;
       console.log(`SKIP: ${result.status} - ${result.note}`);
     }
