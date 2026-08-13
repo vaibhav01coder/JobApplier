@@ -77,27 +77,10 @@ jobs:
       - name: Run Wellfound automation
         run: npx playwright test tests/wellfound.spec.js
 
-      - name: Email results
+      - name: Upload applications CSV
         if: always()
-        uses: dawidd6/action-send-mail@v3
+        uses: actions/upload-artifact@v4
         with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.EMAIL }}
-          password: ${{ secrets.GMAIL_APP_PASSWORD }}
-          subject: "Wellfound Applications Report - ${{ github.run_number }}"
-          to: ${{ secrets.EMAIL }}
-          from: Wellfound Bot <${{ secrets.EMAIL }}>
-          body: |
-            Hi Vivek,
-
-            Your Wellfound auto-apply run has completed.
-
-            Run: #${{ github.run_number }}
-            Status: ${{ job.status }}
-
-            Please find today's applications CSV attached.
-
-            – Wellfound Bot
-          attachments: applications-wellfound.csv
+          name: applications-run-${{ github.run_number }}
+          path: applications-wellfound.csv
+          if-no-files-found: warn
