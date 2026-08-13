@@ -152,8 +152,6 @@ function saveApplicationToCsv({
   status,
   note,
 }) {
-  ensureApplicationsCsv();
-
   if (isAlreadyLogged(job.link)) {
     console.log('Spreadsheet skip: job already logged:', job.link);
     return;
@@ -741,9 +739,13 @@ async function closeModalIfOpen(page) {
   await page.waitForTimeout(700);
 }
 
-async function applyToWellfoundJob(page, job, matchedSkills, { onSubmitted } = {}) {
+async function applyToWellfoundJob(page, job, matchedSkills, { onSubmitted, cancelled } = {}) {
+  const isCancelled = () => cancelled && cancelled.value;
+
   console.log(`Trying to apply: ${job.title}`);
   console.log(`Link: ${job.link}`);
+
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled before apply button check' };
 
   const applyButton = page
     .getByRole('button', {
@@ -761,10 +763,16 @@ async function applyToWellfoundJob(page, job, matchedSkills, { onSubmitted } = {
     };
   }
 
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled before click' };
+
   await applyButton.click({ force: true });
   await page.waitForTimeout(2500);
 
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled after click' };
+
   await fillCommonApplicationFields(page, job, matchedSkills);
+
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled after form fill' };
 
   if (!APPLY_LIVE) {
     console.log('DRY RUN: Form opened/filled, but application NOT sent.');
@@ -782,6 +790,8 @@ async function applyToWellfoundJob(page, job, matchedSkills, { onSubmitted } = {
 
   // Some forms may have Continue/Next before final submit
   for (let step = 0; step < 5; step++) {
+    if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled during Continue/Next loop' };
+
     const nextButton = page
       .getByRole('button', {
         name: /continue|next/i,
@@ -802,6 +812,8 @@ async function applyToWellfoundJob(page, job, matchedSkills, { onSubmitted } = {
     break;
   }
 
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled before send button check' };
+
   const sendButton = page
     .getByRole('button', {
       name: /send application|submit application|submit|send/i,
@@ -819,6 +831,8 @@ async function applyToWellfoundJob(page, job, matchedSkills, { onSubmitted } = {
       note: 'Submit button not found after opening application form',
     };
   }
+
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled before send click' };
 
   console.log('Clicking final Send/Submit application button...');
 
@@ -1410,11 +1424,12 @@ if (!preferredLocationHandled) {
   );
 }
 
-async function processJobsAndApply(page, jobs, { startApplied = 0, processedLinks = new Set(), runStart = Date.now() } = {}) {
+async function processJobsAndApply(page, jobs, { startApplied = 0, processedLinks = new Set() } = {}) {
+  const runStart = Date.now();
   let appliedCount = startApplied;
   let checkedCount = 0;
   let skippedCount = 0;
-  const BUDGET_MS = 15 * 60 * 1000; // stop 5 min before 20-min test timeout
+  const BUDGET_MS = 12 * 60 * 1000; // 12 min per round — leaves buffer within the 20-min test timeout
 
   for (const job of jobs) {
     if (Date.now() - runStart > BUDGET_MS) {
@@ -1482,8 +1497,10 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
         await closeModalIfOpen(page);
         await page.waitForTimeout(1000);
       }
+      const cancelled = { value: false };
       result = await Promise.race([
         applyToWellfoundJob(page, job, matchedSkills, {
+          cancelled,
           onSubmitted: ({ status, note }) => {
             appliedCount++;
             if (APPLY_LIVE || LOG_DRY_RUN_TO_CSV) {
@@ -1493,7 +1510,10 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
           },
         }),
         new Promise(resolve =>
-          setTimeout(() => resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 90s' }), JOB_TIMEOUT_MS)
+          setTimeout(() => {
+            cancelled.value = true; // stop the background applyToWellfoundJob immediately
+            resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 90s' });
+          }, JOB_TIMEOUT_MS)
         ),
       ]);
       if (result.status === 'TIMEOUT') {
@@ -1543,7 +1563,6 @@ try {
   const processedLinks = new Set();
   let totalApplied = 0;
   let scanLimit = MAX_SCAN_JOBS;
-  const runStart = Date.now();
 
   for (let round = 1; round <= 3; round++) {
     console.log(`\n--- Round ${round} (target: ${MIN_APPLY_TARGET}, submitted so far: ${totalApplied}) ---`);
@@ -1564,7 +1583,7 @@ try {
       break;
     }
 
-    const result = await processJobsAndApply(page, newJobs, { startApplied: totalApplied, processedLinks, runStart });
+    const result = await processJobsAndApply(page, newJobs, { startApplied: totalApplied, processedLinks });
     totalApplied = result.appliedCount;
 
     console.log('\n========== SUMMARY ==========');
