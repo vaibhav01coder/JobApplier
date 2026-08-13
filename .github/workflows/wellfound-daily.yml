@@ -63,7 +63,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: npm install
@@ -87,9 +87,13 @@ jobs:
 
       - name: Email today's applications to Gmail
         if: always()
+        continue-on-error: true
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL: ${{ secrets.NOTIFY_EMAIL }}
           JOB_STATUS: ${{ job.status }}
           TODAY_CSV: "true"
-        run: node send-results-email.js
+        run: |
+          echo "NOTIFY_EMAIL set: ${{ secrets.NOTIFY_EMAIL != '' }}"
+          echo "RESEND_API_KEY set: ${{ secrets.RESEND_API_KEY != '' }}"
+          node send-results-email.js
