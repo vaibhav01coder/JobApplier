@@ -84,3 +84,11 @@ jobs:
           name: applications-run-${{ github.run_number }}
           path: applications-wellfound.csv
           if-no-files-found: warn
+
+      - name: Email results to Gmail
+        if: always()
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL: ${{ secrets.EMAIL }}
+          JOB_STATUS: ${{ job.status }}
+        run: node send-results-email.js
