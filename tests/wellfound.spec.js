@@ -544,53 +544,54 @@ async function detectJobCardSelector(page, configured) {
 
   console.log(`[selector] '${configured}' matched 0 elements — auto-detecting...`);
 
-  // Try progressively broader patterns, each filtered to elements that contain a job link
-  const candidates = [
-    '[class*="styles_component__"]',
-    '[class*="styles_jobListing"]',
-    '[class*="styles_job"]',
-    '[class*="job-card"]',
-    '[class*="JobCard"]',
-    '[class*="card"]:has(a[href*="/jobs/"])',
-    '[class*="listing"]:has(a[href*="/jobs/"])',
-  ];
-
-  for (const c of candidates) {
-    const n = await page.locator(c).count();
-    if (n > 0) {
-      console.log(`[selector] auto-detected '${c}' (${n} elements)`);
-      return c;
-    }
-  }
-
-  // Inspect the live DOM: find the class that appears exactly once per job link
+  // Walk up from each job link to find the card container class:
+  // the first ancestor whose class appears as many times as there are distinct job links.
   const autoClass = await page.evaluate(() => {
-    const links = [...document.querySelectorAll('a[href*="/jobs/"]')].slice(0, 10);
+    const links = [...document.querySelectorAll('a[href*="/jobs/"]')].slice(0, 20);
     if (!links.length) return null;
 
-    const counts = {};
-    for (const link of links) {
-      let el = link.parentElement;
-      for (let d = 0; el && el !== document.body && d < 8; d++, el = el.parentElement) {
-        if (typeof el.className === 'string') {
-          for (const cls of el.className.split(/\s+/).filter(Boolean)) {
-            counts[cls] = (counts[cls] || 0) + 1;
+    // Starting from the first link, walk up and find an ancestor whose class
+    // count in the document roughly equals the number of job links found.
+    const jobLinkCount = links.length;
+
+    let el = links[0].parentElement;
+    for (let d = 0; el && el !== document.body && d < 12; d++, el = el.parentElement) {
+      if (typeof el.className !== 'string') continue;
+      const classes = el.className.trim().split(/\s+/).filter(Boolean);
+      for (const cls of classes) {
+        try {
+          const allOfClass = document.querySelectorAll(`.${CSS.escape(cls)}`);
+          // Check how many of these elements contain a job link
+          let withJobLink = 0;
+          for (const node of allOfClass) {
+            if (node.querySelector('a[href*="/jobs/"]')) withJobLink++;
           }
-        }
+          // Accept if ≥70% of matching elements are job cards and count is reasonable
+          if (withJobLink >= 2 && withJobLink / allOfClass.length >= 0.7 && allOfClass.length <= 300) {
+            return cls;
+          }
+        } catch (_) {}
       }
     }
-
-    const target = links.length;
-    return Object.entries(counts).find(([, c]) => c === target)?.[0] ?? null;
+    return null;
   });
 
   if (autoClass) {
-    const sel = `.${CSS.escape(autoClass)}`;
-    const n = await page.locator(sel).count();
+    const sel = `.${autoClass}`;
+    const n = await page.locator(`${sel}:has(a[href*="/jobs/"])`).count();
     if (n > 0) {
-      console.log(`[selector] DOM-detected '${sel}' (${n} elements)`);
-      return sel;
+      const finalSel = `${sel}:has(a[href*="/jobs/"])`;
+      console.log(`[selector] DOM-detected '${finalSel}' (${n} elements)`);
+      return finalSel;
     }
+  }
+
+  // Last fallback: any element with a job link (broad but safe)
+  const fallback = '[class*="styles_"]:has(a[href*="/jobs/"])';
+  const fn = await page.locator(fallback).count();
+  if (fn > 0) {
+    console.log(`[selector] fallback '${fallback}' (${fn} elements)`);
+    return fallback;
   }
 
   console.warn(`[selector] auto-detection failed, sticking with '${configured}'`);
