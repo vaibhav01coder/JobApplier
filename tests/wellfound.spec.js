@@ -4,7 +4,7 @@ const fs = require('fs');
 
 const { CV } = require('../config');
 
-test.setTimeout(30 * 60 * 1000); // 30 minutes
+test.setTimeout(20 * 60 * 1000); // 20 minutes
 
 const ROOT_DIR = path.join(__dirname, '..');
 const PROFILE_DIR = path.join(ROOT_DIR, '.wellfound-chrome-profile');
@@ -1418,12 +1418,18 @@ if (!preferredLocationHandled) {
   );
 }
 
-async function processJobsAndApply(page, jobs, { startApplied = 0, processedLinks = new Set() } = {}) {
+async function processJobsAndApply(page, jobs, { startApplied = 0, processedLinks = new Set(), runStart = Date.now() } = {}) {
   let appliedCount = startApplied;
   let checkedCount = 0;
   let skippedCount = 0;
+  const BUDGET_MS = 17 * 60 * 1000; // stop 3 min before 20-min test timeout
 
   for (const job of jobs) {
+    if (Date.now() - runStart > BUDGET_MS) {
+      console.log('Time budget reached, stopping to avoid timeout.');
+      break;
+    }
+
     if (appliedCount >= MAX_APPLICATIONS) {
       console.log(`Reached max applications: ${MAX_APPLICATIONS}`);
       break;
@@ -1442,8 +1448,8 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
 
     await page.goto(job.link, {
       waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
+      timeout: 15000,
+    }).catch(() => {});
 
     const details = await extractJobDetailText(page);
 
@@ -1475,16 +1481,14 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
       continue;
     }
 
-    // Retry up to 2 times if submit button was not found (15-sec timeout per attempt)
+    // 15-second hard timeout per apply attempt, one retry max
     const JOB_TIMEOUT_MS = 15 * 1000;
     let result;
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (attempt > 1) {
-        console.log(`Apply failed (${result.status}), retrying in 4s... [attempt ${attempt}/2]`);
+        console.log(`Apply failed (${result.status}), retrying... [attempt ${attempt}/2]`);
         await closeModalIfOpen(page);
-        await page.waitForTimeout(4000);
-        await page.goto(job.link, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(1000);
       }
       result = await Promise.race([
         applyToWellfoundJob(page, job, matchedSkills),
@@ -1493,7 +1497,7 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
         ),
       ]);
       if (result.status === 'TIMEOUT') {
-        console.log('SKIP: Job timed out after 3 minutes, moving on.');
+        console.log('SKIP: Job timed out, moving on.');
         await closeModalIfOpen(page);
         break;
       }
@@ -1554,6 +1558,7 @@ try {
   const processedLinks = new Set();
   let totalApplied = 0;
   let scanLimit = MAX_SCAN_JOBS;
+  const runStart = Date.now();
 
   for (let round = 1; round <= 3; round++) {
     console.log(`\n--- Round ${round} (target: ${MIN_APPLY_TARGET}, submitted so far: ${totalApplied}) ---`);
@@ -1574,7 +1579,7 @@ try {
       break;
     }
 
-    const result = await processJobsAndApply(page, newJobs, { startApplied: totalApplied, processedLinks });
+    const result = await processJobsAndApply(page, newJobs, { startApplied: totalApplied, processedLinks, runStart });
     totalApplied = result.appliedCount;
 
     console.log('\n========== SUMMARY ==========');
