@@ -360,8 +360,8 @@ async function applyWellfoundInternshipFilter(page) {
     timeout: 60000,
   });
 
-  await page.waitForLoadState('networkidle').catch(() => {});
-  await page.waitForTimeout(4000);
+  await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(3000);
 
   const filtersButton = page.getByRole('button', { name: /filter|filters/i });
 
