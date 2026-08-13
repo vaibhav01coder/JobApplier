@@ -78,6 +78,7 @@ const TARGET_LOCATIONS = env(
   'TARGET_LOCATIONS',
   'India||Hyderabad||Bengaluru||Bangalore||Pune||Mumbai||Delhi NCR||Remote India'
 )
+
   .split('||')
   .map(x => x.trim())
   .filter(Boolean);
@@ -86,6 +87,17 @@ const MIN_SKILL_MATCHES = Number(env('MIN_SKILL_MATCHES', '1'));
 const MAX_APPLICATIONS = Number(env('MAX_APPLICATIONS', '50'));
 const MAX_SCAN_JOBS = Number(env('MAX_SCAN_JOBS', '150'));
 const MIN_APPLY_TARGET = Number(env('MIN_APPLY_TARGET', '20'));
+
+const TARGET_ROLES = env('TARGET_ROLES', 'intern||internship')
+  .split('||')
+  .map(x => x.trim().toLowerCase())
+  .filter(Boolean);
+
+function roleMatches(text) {
+  if (!TARGET_ROLES.length) return true;
+  const lower = (text || '').toLowerCase();
+  return TARGET_ROLES.some(r => lower.includes(r));
+}
 
 const APPLY_LIVE = String(env('APPLY_LIVE', 'false')).toLowerCase() === 'true';
 const INCLUDE_OFF_PLATFORM = String(env('INCLUDE_OFF_PLATFORM', 'false')).toLowerCase() === 'true';
@@ -1471,6 +1483,14 @@ async function processJobsAndApply(page, jobs, { startApplied = 0, processedLink
     if (!isLocationOk) {
       skippedCount++;
       console.log('SKIP: location is not India/selected location');
+      continue;
+    }
+
+    const isRoleOk = roleMatches(fullText);
+    console.log(`Role match: ${isRoleOk} (target: ${TARGET_ROLES.join(', ')})`);
+    if (!isRoleOk) {
+      skippedCount++;
+      console.log('SKIP: role does not match TARGET_ROLES');
       continue;
     }
 
