@@ -4,7 +4,7 @@ const fs = require('fs');
 
 const { CV } = require('../config');
 
-test.setTimeout(30 * 60 * 1000); // 30 minutes
+test.setTimeout(20 * 60 * 1000); // 20 minutes
 
 const ROOT_DIR = path.join(__dirname, '..');
 const PROFILE_DIR = path.join(ROOT_DIR, '.wellfound-chrome-profile');
@@ -78,19 +78,34 @@ const TARGET_LOCATIONS = env(
   'TARGET_LOCATIONS',
   'India||Hyderabad||Bengaluru||Bangalore||Pune||Mumbai||Delhi NCR||Remote India'
 )
+
   .split('||')
   .map(x => x.trim())
   .filter(Boolean);
 
-const MIN_SKILL_MATCHES = Number(env('MIN_SKILL_MATCHES', '3'));
+const MIN_SKILL_MATCHES = Number(env('MIN_SKILL_MATCHES', '1'));
 const MAX_APPLICATIONS = Number(env('MAX_APPLICATIONS', '50'));
 const MAX_SCAN_JOBS = Number(env('MAX_SCAN_JOBS', '150'));
+const MIN_APPLY_TARGET = Number(env('MIN_APPLY_TARGET', '20'));
+
+const TARGET_ROLES = env('TARGET_ROLES', 'internship')
+  .split('||')
+  .map(x => x.trim().toLowerCase())
+  .filter(Boolean);
+
+function roleMatches(text) {
+  if (!TARGET_ROLES.length) return true;
+  const lower = (text || '').toLowerCase();
+  return TARGET_ROLES.some(r => new RegExp(`\\b${r}\\b`).test(lower));
+}
 
 const APPLY_LIVE = String(env('APPLY_LIVE', 'false')).toLowerCase() === 'true';
 const INCLUDE_OFF_PLATFORM = String(env('INCLUDE_OFF_PLATFORM', 'false')).toLowerCase() === 'true';
 const APPLICATIONS_CSV_PATH = path.isAbsolute(env('APPLICATIONS_CSV', 'applications-wellfound.csv'))
   ? env('APPLICATIONS_CSV', 'applications-wellfound.csv')
   : path.join(ROOT_DIR, env('APPLICATIONS_CSV', 'applications-wellfound.csv'));
+
+const TODAY_CSV_PATH = path.join(ROOT_DIR, 'applications-wellfound-today.csv');
 
 const LOG_DRY_RUN_TO_CSV = String(env('LOG_DRY_RUN_TO_CSV', 'false')).toLowerCase() === 'true';
 
@@ -106,30 +121,18 @@ function csvRow(values) {
   return values.map(csvCell).join(',') + '\n';
 }
 
+const CSV_HEADER = '﻿' + csvRow([
+  'Date', 'Site', 'Status', 'Mode', 'Title', 'Company',
+  'Job Link', 'Matched Skills', 'Skill Count', 'Location Match', 'Target Locations', 'Note',
+]);
+
 function ensureApplicationsCsv() {
-  if (fs.existsSync(APPLICATIONS_CSV_PATH)) {
-    return;
+  // All-time CSV: only create if missing (never overwrite)
+  if (!fs.existsSync(APPLICATIONS_CSV_PATH)) {
+    fs.writeFileSync(APPLICATIONS_CSV_PATH, CSV_HEADER, 'utf8');
   }
-
-  // BOM helps Excel read UTF-8 correctly
-  const header =
-    '﻿' +
-    csvRow([
-      'Date',
-      'Site',
-      'Status',
-      'Mode',
-      'Title',
-      'Company',
-      'Job Link',
-      'Matched Skills',
-      'Skill Count',
-      'Location Match',
-      'Target Locations',
-      'Note',
-    ]);
-
-  fs.writeFileSync(APPLICATIONS_CSV_PATH, header, 'utf8');
+  // Today's CSV: always start fresh for this run
+  fs.writeFileSync(TODAY_CSV_PATH, CSV_HEADER, 'utf8');
 }
 
 function isAlreadyLogged(jobLink) {
@@ -149,31 +152,28 @@ function saveApplicationToCsv({
   status,
   note,
 }) {
-  ensureApplicationsCsv();
-
   if (isAlreadyLogged(job.link)) {
     console.log('Spreadsheet skip: job already logged:', job.link);
     return;
   }
 
-  fs.appendFileSync(
-    APPLICATIONS_CSV_PATH,
-    csvRow([
-      new Date().toLocaleString(),
-      'Wellfound',
-      status,
-      APPLY_LIVE ? 'LIVE' : 'DRY_RUN',
-      job.title,
-      job.company,
-      job.link,
-      matchedSkills.join('; '),
-      matchedSkills.length,
-      matchedLocation,
-      TARGET_LOCATIONS.join('; '),
-      note,
-    ]),
-    'utf8'
-  );
+  const row = csvRow([
+    new Date().toLocaleString(),
+    'Wellfound',
+    status,
+    APPLY_LIVE ? 'LIVE' : 'DRY_RUN',
+    job.title,
+    job.company,
+    job.link,
+    matchedSkills.join('; '),
+    matchedSkills.length,
+    matchedLocation,
+    TARGET_LOCATIONS.join('; '),
+    note,
+  ]);
+
+  fs.appendFileSync(APPLICATIONS_CSV_PATH, row, 'utf8');
+  fs.appendFileSync(TODAY_CSV_PATH, row, 'utf8');
 
   console.log('Saved to spreadsheet:', APPLICATIONS_CSV_PATH);
 }
@@ -281,6 +281,10 @@ function getMatchedSkills(text) {
 function locationMatches(text) {
   const lowerText = normalizeText(text);
 
+  // Remote-only jobs are always allowed — can be done from anywhere
+  const isRemoteOnly = /\bremote\s*only\b|\bfully\s*remote\b|\bwork\s*from\s*anywhere\b|\bremote\s*first\b/i.test(lowerText);
+  if (isRemoteOnly) return true;
+
   const hasTargetLocation = TARGET_LOCATIONS.some(location => {
     return lowerText.includes(normalizeText(location));
   });
@@ -377,47 +381,41 @@ async function applyWellfoundInternshipFilter(page) {
     await page.waitForTimeout(1000);
   }
 
-  const fullTimeCheckbox = page.getByRole('checkbox', {
-    name: /full.?time/i,
-  });
-
-  if (await fullTimeCheckbox.isVisible().catch(() => false)) {
-    if (await fullTimeCheckbox.isChecked().catch(() => false)) {
-      await fullTimeCheckbox.uncheck({ force: true }).catch(() => {});
-      await page.waitForTimeout(500);
-    }
-  } else {
-    const fullTimeOption = page.getByText(/full.?time/i).first();
-
-    if (await fullTimeOption.isVisible().catch(() => false)) {
-      await fullTimeOption.click({ force: true }).catch(() => {});
-      await page.waitForTimeout(500);
+  // Uncheck all job-type checkboxes first, then check only TARGET_ROLES ones
+  const allJobTypeCheckboxes = page.getByRole('checkbox');
+  const checkboxCount = await allJobTypeCheckboxes.count().catch(() => 0);
+  for (let i = 0; i < checkboxCount; i++) {
+    const cb = allJobTypeCheckboxes.nth(i);
+    const label = await cb.getAttribute('aria-label').catch(() => '') ||
+                  await cb.locator('xpath=following-sibling::*[1]').innerText().catch(() => '') || '';
+    if (/full.?time|contract|part.?time/i.test(label)) {
+      if (await cb.isChecked().catch(() => false)) {
+        await cb.uncheck({ force: true }).catch(() => {});
+        await page.waitForTimeout(300);
+      }
     }
   }
 
-  const internshipCheckbox = page.getByRole('checkbox', {
-    name: /internship|intern/i,
-  });
-
-  if (await internshipCheckbox.isVisible().catch(() => false)) {
-    if (!(await internshipCheckbox.isChecked().catch(() => false))) {
-      await internshipCheckbox.check({ force: true }).catch(() => {});
+  // Select checkboxes matching TARGET_ROLES
+  const roleRegex = new RegExp(TARGET_ROLES.join('|'), 'i');
+  const roleCheckbox = page.getByRole('checkbox', { name: roleRegex });
+  if (await roleCheckbox.isVisible().catch(() => false)) {
+    if (!(await roleCheckbox.isChecked().catch(() => false))) {
+      await roleCheckbox.check({ force: true }).catch(() => {});
       await page.waitForTimeout(500);
     }
   } else {
-    const internshipOption = page.getByText(/internship|intern/i).first();
-
-    if (await internshipOption.isVisible().catch(() => false)) {
-      await internshipOption.click({ force: true }).catch(() => {});
+    const roleOption = page.getByText(roleRegex).first();
+    if (await roleOption.isVisible().catch(() => false)) {
+      await roleOption.click({ force: true }).catch(() => {});
       await page.waitForTimeout(500);
     }
   }
 
   await closeWellfoundFilterPanel(page);
-
   await page.waitForTimeout(3000);
 
-  console.log('Internship filter applied and filter panel closed.');
+  console.log(`Job type filter applied for: ${TARGET_ROLES.join(', ')}`);
 }
 
 async function setOffPlatformJobs(page) {
@@ -741,9 +739,13 @@ async function closeModalIfOpen(page) {
   await page.waitForTimeout(700);
 }
 
-async function applyToWellfoundJob(page, job, matchedSkills) {
+async function applyToWellfoundJob(page, job, matchedSkills, { onSubmitted, cancelled } = {}) {
+  const isCancelled = () => cancelled && cancelled.value;
+
   console.log(`Trying to apply: ${job.title}`);
   console.log(`Link: ${job.link}`);
+
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled before apply button check' };
 
   const applyButton = page
     .getByRole('button', {
@@ -761,10 +763,16 @@ async function applyToWellfoundJob(page, job, matchedSkills) {
     };
   }
 
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled before click' };
+
   await applyButton.click({ force: true });
   await page.waitForTimeout(2500);
 
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled after click' };
+
   await fillCommonApplicationFields(page, job, matchedSkills);
+
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled after form fill' };
 
   if (!APPLY_LIVE) {
     console.log('DRY RUN: Form opened/filled, but application NOT sent.');
@@ -782,6 +790,8 @@ async function applyToWellfoundJob(page, job, matchedSkills) {
 
   // Some forms may have Continue/Next before final submit
   for (let step = 0; step < 5; step++) {
+    if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled during Continue/Next loop' };
+
     const nextButton = page
       .getByRole('button', {
         name: /continue|next/i,
@@ -793,13 +803,16 @@ async function applyToWellfoundJob(page, job, matchedSkills) {
 
       await nextButton.click({ force: true }).catch(() => {});
       await page.waitForTimeout(1500);
-
-      await fillCommonApplicationFields(page, job, matchedSkills);
+      // Fill only if new fields appeared on this step
+      const newTextarea = await page.locator('textarea:visible').count().catch(() => 0);
+      if (newTextarea > 0) await fillCommonApplicationFields(page, job, matchedSkills);
       continue;
     }
 
     break;
   }
+
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled before send button check' };
 
   const sendButton = page
     .getByRole('button', {
@@ -819,6 +832,8 @@ async function applyToWellfoundJob(page, job, matchedSkills) {
     };
   }
 
+  if (isCancelled()) return { applied: false, status: 'CANCELLED', note: 'Cancelled before send click' };
+
   console.log('Clicking final Send/Submit application button...');
 
   await sendButton.click({ force: true });
@@ -830,33 +845,21 @@ async function applyToWellfoundJob(page, job, matchedSkills) {
 
   if (await successText.isVisible().catch(() => false)) {
     console.log('APPLICATION SUBMITTED SUCCESSFULLY');
-
-    return {
-      applied: true,
-      status: 'SUBMITTED',
-      note: 'Success message detected',
-    };
+    if (onSubmitted) onSubmitted({ status: 'SUBMITTED', note: 'Success message detected' });
+    return { applied: true, status: 'SUBMITTED', note: 'Success message detected' };
   }
 
   const pageText = await page.locator('body').innerText().catch(() => '');
 
   if (/application sent|applied|submitted/i.test(pageText)) {
     console.log('APPLICATION SUBMITTED SUCCESSFULLY');
-
-    return {
-      applied: true,
-      status: 'SUBMITTED',
-      note: 'Success text found in page body',
-    };
+    if (onSubmitted) onSubmitted({ status: 'SUBMITTED', note: 'Success text found in page body' });
+    return { applied: true, status: 'SUBMITTED', note: 'Success text found in page body' };
   }
 
   console.log('Submit clicked, but success confirmation was not detected.');
-
-  return {
-    applied: true,
-    status: 'SUBMITTED_UNCONFIRMED',
-    note: 'Submit clicked, but success confirmation was not detected',
-  };
+  if (onSubmitted) onSubmitted({ status: 'SUBMITTED_UNCONFIRMED', note: 'Submit clicked, no confirmation detected' });
+  return { applied: true, status: 'SUBMITTED_UNCONFIRMED', note: 'Submit clicked, no confirmation detected' };
 }
 async function isVisible(locator, timeout = 800) {
   try {
@@ -874,7 +877,25 @@ async function getQuestionContainer(page, questionRegex) {
     return null;
   }
 
-  // Get nearest useful parent container
+  // Walk up ancestor levels until we find one that contains interactive elements
+  for (const level of [1, 2, 3, 4]) {
+    const container = questionText.locator(
+      `xpath=ancestor::*[self::fieldset or self::section or self::div][${level}]`
+    );
+
+    if ((await container.count().catch(() => 0)) === 0) continue;
+
+    const hasInteractive = await container
+      .locator('input, select, button, [role="radio"], [role="checkbox"], [role="combobox"]')
+      .count()
+      .catch(() => 0);
+
+    if (hasInteractive > 0) {
+      return container;
+    }
+  }
+
+  // Fallback to nearest div
   return questionText.locator(
     'xpath=ancestor::*[self::fieldset or self::section or self::div][1]'
   );
@@ -902,7 +923,7 @@ async function chooseOptionNearQuestion(
    */
   const select = container.locator('select').first();
 
-  if (await isVisible(select, 500)) {
+  if (await isVisible(select, 200)) {
     const selectOptions = await select.locator('option').evaluateAll(opts =>
       opts.map((o, index) => ({
         index,
@@ -965,7 +986,7 @@ async function chooseOptionNearQuestion(
    */
   const radio = container.getByRole('radio', { name: optionRegex }).first();
 
-  if (await isVisible(radio, 500)) {
+  if (await isVisible(radio, 200)) {
     await radio.check({ force: true }).catch(async () => {
       await radio.click({ force: true }).catch(() => {});
     });
@@ -999,7 +1020,7 @@ async function chooseOptionNearQuestion(
    */
   const checkbox = container.getByRole('checkbox', { name: optionRegex }).first();
 
-  if (await isVisible(checkbox, 500)) {
+  if (await isVisible(checkbox, 200)) {
     const checked = await checkbox.isChecked().catch(() => false);
 
     if (!checked) {
@@ -1041,7 +1062,7 @@ async function chooseOptionNearQuestion(
    */
   const combobox = container.getByRole('combobox').first();
 
-  if (await isVisible(combobox, 500)) {
+  if (await isVisible(combobox, 200)) {
     await combobox.click({ force: true }).catch(() => {});
     await page.waitForTimeout(700);
 
@@ -1107,7 +1128,7 @@ async function chooseOptionNearQuestion(
    */
   const button = container.getByRole('button', { name: optionRegex }).first();
 
-  if (await isVisible(button, 500)) {
+  if (await isVisible(button, 200)) {
     await button.click({ force: true }).catch(() => {});
     console.log(`Clicked button option: ${optionRegex}`);
     await page.waitForTimeout(500);
@@ -1124,7 +1145,7 @@ async function chooseOptionNearQuestion(
       if (await firstButton.isVisible().catch(() => false)) {
         const buttonText = await firstButton.innerText().catch(() => '');
 
-        if (/close|cancel|dismiss|back/i.test(buttonText)) {
+        if (/close|cancel|dismiss|back|send|submit|apply/i.test(buttonText)) {
           continue;
         }
 
@@ -1141,7 +1162,7 @@ async function chooseOptionNearQuestion(
    */
   const textOption = container.getByText(optionRegex).last();
 
-  if (await isVisible(textOption, 500)) {
+  if (await isVisible(textOption, 200)) {
     await textOption.click({ force: true }).catch(() => {});
     console.log(`Clicked text option: ${optionRegex}`);
     await page.waitForTimeout(500);
@@ -1286,7 +1307,8 @@ async function answerExtraApplicationQuestions(page) {
     page,
     /willing.*relocat|open.*relocat|relocat/i,
     /yes|open|willing/i,
-    'Willing to relocate'
+    'Willing to relocate',
+    { fallbackToFirst: true }
   );
 
 const preferredRelocationHandled = await chooseOptionNearQuestion(
@@ -1337,7 +1359,8 @@ if (!preferredLocationHandled) {
     page,
     /work.*mode|remote|hybrid|onsite|office/i,
     /remote|hybrid|onsite|yes/i,
-    'Work mode preference'
+    'Work mode preference',
+    { fallbackToFirst: true }
   );
 
   /**
@@ -1401,16 +1424,26 @@ if (!preferredLocationHandled) {
   );
 }
 
-async function processJobsAndApply(page, jobs) {
-  let appliedCount = 0;
+async function processJobsAndApply(page, jobs, { startApplied = 0, processedLinks = new Set() } = {}) {
+  const runStart = Date.now();
+  let appliedCount = startApplied;
   let checkedCount = 0;
   let skippedCount = 0;
+  const BUDGET_MS = 12 * 60 * 1000; // 12 min per round — leaves buffer within the 20-min test timeout
 
   for (const job of jobs) {
+    if (Date.now() - runStart > BUDGET_MS) {
+      console.log('Time budget reached, stopping to avoid timeout.');
+      break;
+    }
+
     if (appliedCount >= MAX_APPLICATIONS) {
       console.log(`Reached max applications: ${MAX_APPLICATIONS}`);
       break;
     }
+
+    if (processedLinks.has(job.link)) continue;
+    processedLinks.add(job.link);
 
     checkedCount++;
 
@@ -1422,8 +1455,8 @@ async function processJobsAndApply(page, jobs) {
 
     await page.goto(job.link, {
       waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
+      timeout: 15000,
+    }).catch(() => {});
 
     const details = await extractJobDetailText(page);
 
@@ -1455,27 +1488,43 @@ async function processJobsAndApply(page, jobs) {
       continue;
     }
 
-    const result = await applyToWellfoundJob(page, job, matchedSkills);
-
-    if (result.applied) {
-      appliedCount++;
-
-      if (APPLY_LIVE || LOG_DRY_RUN_TO_CSV) {
-        saveApplicationToCsv({
-          job,
-          matchedSkills,
-          matchedLocation,
-          status: result.status,
-          note: result.note,
-        });
+    // 90-second hard timeout per apply attempt, one retry max
+    const JOB_TIMEOUT_MS = 90 * 1000;
+    let result;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (attempt > 1) {
+        console.log(`Apply failed (${result.status}), retrying... [attempt ${attempt}/2]`);
+        await closeModalIfOpen(page);
+        await page.waitForTimeout(1000);
       }
-
-      if (APPLY_LIVE) {
-        console.log(`Submitted count: ${appliedCount}/${MAX_APPLICATIONS}`);
-      } else {
-        console.log(`Dry-run matched count: ${appliedCount}/${MAX_APPLICATIONS}`);
+      const cancelled = { value: false };
+      result = await Promise.race([
+        applyToWellfoundJob(page, job, matchedSkills, {
+          cancelled,
+          onSubmitted: ({ status, note }) => {
+            appliedCount++;
+            if (APPLY_LIVE || LOG_DRY_RUN_TO_CSV) {
+              saveApplicationToCsv({ job, matchedSkills, matchedLocation, status, note });
+            }
+            console.log(`Submitted count: ${appliedCount}/${MAX_APPLICATIONS}`);
+          },
+        }),
+        new Promise(resolve =>
+          setTimeout(() => {
+            cancelled.value = true; // stop the background applyToWellfoundJob immediately
+            resolve({ applied: false, status: 'TIMEOUT', note: 'Job timed out after 90s' });
+          }, JOB_TIMEOUT_MS)
+        ),
+      ]);
+      if (result.status === 'TIMEOUT') {
+        console.log('SKIP: Job timed out, moving on.');
+        await closeModalIfOpen(page);
+        break;
       }
-    } else {
+      if (result.applied || result.status === 'SKIPPED_NO_APPLY_BUTTON') break;
+    }
+
+    if (!result.applied) {
       skippedCount++;
       console.log(`SKIP: ${result.status} - ${result.note}`);
     }
@@ -1483,11 +1532,7 @@ async function processJobsAndApply(page, jobs) {
     await page.waitForTimeout(1500);
   }
 
-  console.log('\n========== SUMMARY ==========');
-  console.log(`Checked jobs: ${checkedCount}`);
-  console.log(`${APPLY_LIVE ? 'Submitted' : 'Dry-run matched'} jobs: ${appliedCount}`);
-  console.log(`Skipped jobs: ${skippedCount}`);
-  console.log(`Spreadsheet path: ${APPLICATIONS_CSV_PATH}`);
+  return { appliedCount, checkedCount, skippedCount };
 }
 
 test('open Wellfound internship jobs and apply by criteria', async () => {
@@ -1504,6 +1549,9 @@ test('open Wellfound internship jobs and apply by criteria', async () => {
 const session = await createBrowserSession();
 const { page } = session;
 
+// Always create today's CSV at run start so the email always has a file to attach
+ensureApplicationsCsv();
+
 try {
   await applyWellfoundInternshipFilter(page);
 
@@ -1512,14 +1560,52 @@ try {
 
   await setOffPlatformJobs(page);
 
-  const resolvedSelector = await detectJobCardSelector(page, JOB_CARD_SELECTOR);
-  const jobs = await collectJobsByScrolling(page, resolvedSelector, MAX_SCAN_JOBS);
+  const processedLinks = new Set();
+  let totalApplied = 0;
+  let scanLimit = MAX_SCAN_JOBS;
 
-  if (!jobs.length) {
-    throw new Error(`No jobs collected. Check JOB_CARD_SELECTOR: ${resolvedSelector}`);
+  for (let round = 1; round <= 3; round++) {
+    console.log(`\n--- Round ${round} (target: ${MIN_APPLY_TARGET}, submitted so far: ${totalApplied}) ---`);
+
+    const resolvedSelector = await detectJobCardSelector(page, JOB_CARD_SELECTOR);
+    const allJobs = await collectJobsByScrolling(page, resolvedSelector, scanLimit);
+
+    if (!allJobs.length) {
+      if (round === 1) throw new Error(`No jobs collected. Check JOB_CARD_SELECTOR: ${resolvedSelector}`);
+      console.log('No jobs found in this round. Stopping.');
+      break;
+    }
+
+    const newJobs = allJobs.filter(j => !processedLinks.has(j.link));
+
+    if (!newJobs.length) {
+      console.log('No new jobs in this round. Stopping.');
+      break;
+    }
+
+    const result = await processJobsAndApply(page, newJobs, { startApplied: totalApplied, processedLinks });
+    totalApplied = result.appliedCount;
+
+    console.log('\n========== SUMMARY ==========');
+    console.log(`Checked jobs: ${result.checkedCount}`);
+    console.log(`${APPLY_LIVE ? 'Submitted' : 'Dry-run matched'} jobs: ${totalApplied}`);
+    console.log(`Skipped jobs: ${result.skippedCount}`);
+    console.log(`Spreadsheet path: ${APPLICATIONS_CSV_PATH}`);
+
+    if (totalApplied >= MIN_APPLY_TARGET || totalApplied >= MAX_APPLICATIONS) {
+      console.log(`Reached target: ${totalApplied}/${MIN_APPLY_TARGET}`);
+      break;
+    }
+
+    if (round < 3) {
+      console.log(`\nOnly ${totalApplied}/${MIN_APPLY_TARGET} submitted. Reloading jobs for round ${round + 1}...`);
+      scanLimit = Math.min(scanLimit + 100, 400);
+      await applyWellfoundInternshipFilter(page);
+      await setOffPlatformJobs(page);
+    }
   }
 
-  await processJobsAndApply(page, jobs);
+  console.log(`\nFinal submitted count: ${totalApplied}`);
 } finally {
   await session.close();
 }
